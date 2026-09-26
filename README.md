@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/logo.svg" alt="Lume Store" width="240" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo-dark.svg" />
+    <img src="docs/logo.svg" alt="Lume Store" width="240" />
+  </picture>
 </p>
 
 <h1 align="center">
@@ -25,7 +28,7 @@ Assim os microserviços ficam isolados, a autenticação fica num lugar só e o 
 ## Arquitetura
 
 <p align="center">
-  <img src="docs/arch.gif" alt="Arquitetura da Lume Store" />
+  <img src="docs/arch.gif" alt="Arquitetura do lume-gateway: recebe o navegador e roteia para users, catalog e orders" />
 </p>
 
 ## O que foi construído
