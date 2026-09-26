@@ -3,24 +3,24 @@ info:
   title: Lume Store · API Gateway
   version: 2.0.0
   description: |
-    Todas as chamadas passam pelo **API Gateway**, que valida o token e repassa ao microserviço certo:
-    `/api/itens` → serviço de itens, `/api/pedidos` → serviço de pedidos, `/api/usuarios` e `/api/auth` → serviço de usuários.
+    Every call goes through the **API Gateway**, which validates the token and forwards it to the right microservice:
+    `/api/products` → catalog, `/api/orders` → orders, `/api/users` and `/api/auth` → users.
 
-    1. Faça login em **POST /api/auth/login** (`cliente@lumestore.dev` / `senha123` ou `admin@lumestore.dev` / `admin123`).
-    2. Copie o `token`, clique em **Authorize** e cole.
-    3. Crie um pedido e veja o estoque do item diminuir.
+    1. Log in with **POST /api/auth/login** (`cliente@lumestore.dev` / `senha123` or `admin@lumestore.dev` / `admin123`).
+    2. Copy the `token`, click **Authorize** and paste it.
+    3. Place an order and watch the product stock go down.
 servers:
   - url: /
 tags:
-  - name: Catálogo
-    description: Serviço de itens (público para leitura; escrita só para admin)
-  - name: Autenticação
-    description: Serviço de usuários
-  - name: Usuários
-    description: Serviço de usuários
-  - name: Pedidos
-    description: Serviço de pedidos (conversa com o serviço de itens para reservar estoque)
-  - name: Saúde
+  - name: Products
+    description: Catalog service (public reads, admin-only writes)
+  - name: Auth
+    description: Users service
+  - name: Users
+    description: Users service
+  - name: Orders
+    description: Orders service (talks to the catalog to reserve stock)
+  - name: Health
 
 components:
   securitySchemes:
@@ -28,62 +28,62 @@ components:
       type: http
       scheme: bearer
   schemas:
-    Erro:
+    Error:
       type: object
       properties:
-        erro: { type: string }
-    Item:
+        error: { type: string, example: Produto não encontrado }
+    Product:
       type: object
       properties:
         id: { type: integer, example: 7 }
-        nome: { type: string, example: Fone over-ear Bluetooth }
-        descricao: { type: string }
-        preco: { type: number, example: 449.9 }
-        estoque: { type: integer, example: 40 }
-        categoria: { type: string, example: Áudio }
-        imagem: { type: string, example: /produtos/fone-over-ear.jpg }
-        destaque: { type: boolean }
-    ItemEntrada:
+        name: { type: string, example: Fone over-ear Bluetooth }
+        description: { type: string }
+        price: { type: number, example: 449.9 }
+        stock: { type: integer, example: 40 }
+        category: { type: string, example: Áudio }
+        image: { type: string, example: /produtos/fone-over-ear.jpg }
+        featured: { type: boolean }
+    ProductInput:
       type: object
-      required: [nome, preco]
+      required: [name, price]
       properties:
-        nome: { type: string }
-        descricao: { type: string }
-        preco: { type: number }
-        estoque: { type: integer }
-        categoria: { type: string }
-        imagem: { type: string }
-        destaque: { type: boolean }
-      example: { nome: Carregador USB-C 65 W, descricao: Carregamento rápido para notebook e celular., preco: 199.9, estoque: 30, categoria: Acessórios, imagem: /produtos/placeholder.jpg }
-    Usuario:
+        name: { type: string }
+        description: { type: string }
+        price: { type: number }
+        stock: { type: integer }
+        category: { type: string }
+        image: { type: string }
+        featured: { type: boolean }
+      example: { name: Carregador USB-C 65 W, description: Carregamento rápido para notebook e celular., price: 199.9, stock: 30, category: Acessórios, image: /produtos/placeholder.jpg }
+    User:
       type: object
       properties:
         id: { type: integer }
-        nome: { type: string }
+        name: { type: string }
         email: { type: string }
-        endereco: { type: string }
-        telefone: { type: string }
+        address: { type: string }
+        phone: { type: string }
         is_admin: { type: boolean }
-        data_cadastro: { type: string, format: date-time }
-    Pedido:
+        created_at: { type: string, format: date-time }
+    Order:
       type: object
       properties:
         id: { type: integer }
-        usuario_id: { type: integer }
-        data: { type: string, format: date-time }
-        status: { type: string, enum: [pendente, pago, enviado, entregue, cancelado] }
-        endereco_entrega: { type: string }
-        valor_total: { type: number }
-        itens:
+        user_id: { type: integer }
+        created_at: { type: string, format: date-time }
+        status: { type: string, enum: [pending, paid, shipped, delivered, cancelled] }
+        shipping_address: { type: string }
+        total: { type: number }
+        items:
           type: array
           items:
             type: object
             properties:
-              item_id: { type: integer }
-              nome: { type: string }
-              imagem: { type: string }
-              quantidade: { type: integer }
-              preco_unitario: { type: number }
+              product_id: { type: integer }
+              name: { type: string }
+              image: { type: string }
+              quantity: { type: integer }
+              unit_price: { type: number }
 
 security:
   - bearerAuth: []
@@ -91,91 +91,91 @@ security:
 paths:
   /health:
     get:
-      tags: [Saúde]
-      summary: Status do gateway e dos três microserviços
+      tags: [Health]
+      summary: Status of the gateway and the three microservices
       security: []
       responses:
         '200':
-          description: Todos online
+          description: Everything online
           content:
             application/json:
-              example: { api_gateway: online, services: { itens: online, pedidos: online, usuarios: online } }
-        '503': { description: Algum serviço fora do ar }
+              example: { gateway: online, services: { catalog: online, orders: online, users: online } }
+        '503': { description: A service is down }
 
-  /api/itens:
+  /api/products:
     get:
-      tags: [Catálogo]
-      summary: Listar produtos
+      tags: [Products]
+      summary: List products
       security: []
       parameters:
-        - { in: query, name: busca, schema: { type: string }, example: fone }
-        - { in: query, name: categoria, schema: { type: string }, example: Áudio }
-        - { in: query, name: destaque, schema: { type: boolean } }
+        - { in: query, name: search, schema: { type: string }, example: fone }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: featured, schema: { type: boolean } }
       responses:
         '200':
-          description: Produtos
+          description: Products
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  itens: { type: array, items: { $ref: '#/components/schemas/Item' } }
+                  products: { type: array, items: { $ref: '#/components/schemas/Product' } }
     post:
-      tags: [Catálogo]
-      summary: Cadastrar produto (admin)
+      tags: [Products]
+      summary: Create a product (admin)
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ItemEntrada' }
+            schema: { $ref: '#/components/schemas/ProductInput' }
       responses:
-        '201': { description: Criado, content: { application/json: { schema: { $ref: '#/components/schemas/Item' } } } }
-        '401': { description: Sem login }
-        '403': { description: Não é admin }
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/Product' } } } }
+        '401': { description: Not logged in }
+        '403': { description: Not an admin }
 
-  /api/itens/categorias:
+  /api/products/categories:
     get:
-      tags: [Catálogo]
-      summary: Categorias com a quantidade de produtos
+      tags: [Products]
+      summary: Categories with their product count
       security: []
       responses:
         '200':
-          description: Categorias
+          description: Categories
           content:
             application/json:
-              example: { categorias: [{ nome: Áudio, total: 4 }, { nome: Eletrônicos, total: 4 }] }
+              example: { categories: [{ name: Áudio, total: 4 }, { name: Eletrônicos, total: 4 }] }
 
-  /api/itens/{id}:
+  /api/products/{id}:
     parameters:
       - { in: path, name: id, required: true, schema: { type: integer }, example: 7 }
     get:
-      tags: [Catálogo]
-      summary: Detalhe do produto
+      tags: [Products]
+      summary: Product details
       security: []
       responses:
-        '200': { description: Produto, content: { application/json: { schema: { $ref: '#/components/schemas/Item' } } } }
-        '404': { description: Não encontrado }
+        '200': { description: Product, content: { application/json: { schema: { $ref: '#/components/schemas/Product' } } } }
+        '404': { description: Not found }
     put:
-      tags: [Catálogo]
-      summary: Atualizar produto (admin)
+      tags: [Products]
+      summary: Update a product (admin)
       requestBody:
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/ItemEntrada' }
+            schema: { $ref: '#/components/schemas/ProductInput' }
       responses:
-        '200': { description: Atualizado }
-        '403': { description: Não é admin }
+        '200': { description: Updated }
+        '403': { description: Not an admin }
     delete:
-      tags: [Catálogo]
-      summary: Remover produto (admin)
+      tags: [Products]
+      summary: Delete a product (admin)
       responses:
-        '200': { description: Removido }
-        '403': { description: Não é admin }
+        '200': { description: Deleted }
+        '403': { description: Not an admin }
 
   /api/auth/login:
     post:
-      tags: [Autenticação]
-      summary: Login
+      tags: [Auth]
+      summary: Log in
       security: []
       requestBody:
         required: true
@@ -183,34 +183,34 @@ paths:
           application/json:
             schema:
               type: object
-              required: [email, senha]
+              required: [email, password]
               properties:
                 email: { type: string }
-                senha: { type: string }
-            example: { email: cliente@lumestore.dev, senha: senha123 }
+                password: { type: string }
+            example: { email: cliente@lumestore.dev, password: senha123 }
       responses:
         '200':
-          description: Token de sessão (válido por 24 h)
+          description: Session token (valid for 24 h)
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   token: { type: string }
-                  usuario: { $ref: '#/components/schemas/Usuario' }
-        '401': { description: Credenciais inválidas, content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } } }
+                  user: { $ref: '#/components/schemas/User' }
+        '401': { description: Wrong e-mail or password, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
   /api/auth/logout:
     post:
-      tags: [Autenticação]
-      summary: Encerrar a sessão
+      tags: [Auth]
+      summary: End the session
       responses:
-        '200': { description: Sessão encerrada }
+        '200': { description: Session ended }
 
-  /api/usuarios:
+  /api/users:
     post:
-      tags: [Usuários]
-      summary: Criar conta
+      tags: [Users]
+      summary: Sign up
       security: []
       requestBody:
         required: true
@@ -218,117 +218,117 @@ paths:
           application/json:
             schema:
               type: object
-              required: [nome, email, senha]
+              required: [name, email, password]
               properties:
-                nome: { type: string }
+                name: { type: string }
                 email: { type: string }
-                senha: { type: string, minLength: 6 }
-                endereco: { type: string }
-                telefone: { type: string }
-            example: { nome: Maria Exemplo, email: maria@lumestore.dev, senha: exemplo123, endereco: 'Rua Exemplo, 45 - Campinas/SP' }
+                password: { type: string, minLength: 6 }
+                address: { type: string }
+                phone: { type: string }
+            example: { name: Maria Exemplo, email: maria@lumestore.dev, password: exemplo123, address: 'Rua Exemplo, 45 - Campinas/SP' }
       responses:
-        '201': { description: Conta criada, content: { application/json: { schema: { $ref: '#/components/schemas/Usuario' } } } }
-        '409': { description: E-mail já cadastrado }
+        '201': { description: Account created, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '409': { description: E-mail already registered }
     get:
-      tags: [Usuários]
-      summary: Listar usuários (admin)
+      tags: [Users]
+      summary: List users (admin)
       responses:
-        '200': { description: Usuários }
-        '403': { description: Não é admin }
+        '200': { description: Users }
+        '403': { description: Not an admin }
 
-  /api/usuarios/me:
+  /api/users/me:
     get:
-      tags: [Usuários]
-      summary: Meu perfil
+      tags: [Users]
+      summary: My profile
       responses:
-        '200': { description: Perfil, content: { application/json: { schema: { $ref: '#/components/schemas/Usuario' } } } }
-        '401': { description: Sem login }
+        '200': { description: Profile, content: { application/json: { schema: { $ref: '#/components/schemas/User' } } } }
+        '401': { description: Not logged in }
     put:
-      tags: [Usuários]
-      summary: Atualizar meu perfil
+      tags: [Users]
+      summary: Update my profile
       requestBody:
         content:
           application/json:
-            example: { nome: Cliente Demo, endereco: 'Rua Nova, 10 - São Paulo/SP', telefone: '(11) 92222-2222' }
+            example: { name: Cliente Lume, address: 'Rua Nova, 10 - São Paulo/SP', phone: '(11) 92222-2222' }
       responses:
-        '200': { description: Atualizado }
+        '200': { description: Updated }
 
-  /api/usuarios/me/senha:
+  /api/users/me/password:
     patch:
-      tags: [Usuários]
-      summary: Trocar minha senha
+      tags: [Users]
+      summary: Change my password
       requestBody:
         content:
           application/json:
-            example: { senha_atual: senha123, nova_senha: novaSenha123 }
+            example: { current_password: senha123, new_password: novaSenha123 }
       responses:
-        '200': { description: Senha trocada; as outras sessões são encerradas }
-        '401': { description: Senha atual incorreta }
+        '200': { description: Password changed; other sessions are ended }
+        '401': { description: Wrong current password }
 
-  /api/pedidos:
+  /api/orders:
     get:
-      tags: [Pedidos]
-      summary: Meus pedidos (admin vê todos)
+      tags: [Orders]
+      summary: My orders (admins see all)
       responses:
         '200':
-          description: Pedidos
+          description: Orders
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  pedidos: { type: array, items: { $ref: '#/components/schemas/Pedido' } }
+                  orders: { type: array, items: { $ref: '#/components/schemas/Order' } }
     post:
-      tags: [Pedidos]
-      summary: Criar pedido
-      description: O preço vem do catálogo, nunca do cliente. O estoque é reservado no serviço de itens numa única transação.
+      tags: [Orders]
+      summary: Place an order
+      description: Prices come from the catalog, never from the client. Stock is reserved in the catalog in a single transaction.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [itens]
+              required: [items]
               properties:
-                itens:
+                items:
                   type: array
                   items:
                     type: object
                     properties:
-                      item_id: { type: integer }
-                      quantidade: { type: integer }
-                endereco_entrega: { type: string }
-            example: { itens: [{ item_id: 7, quantidade: 1 }, { item_id: 13, quantidade: 1 }], endereco_entrega: 'Rua de Teste, 123 - São Paulo/SP' }
+                      product_id: { type: integer }
+                      quantity: { type: integer }
+                shipping_address: { type: string }
+            example: { items: [{ product_id: 7, quantity: 1 }, { product_id: 13, quantity: 1 }], shipping_address: 'Rua de Teste, 123 - São Paulo/SP' }
       responses:
-        '201': { description: Pedido criado, content: { application/json: { schema: { $ref: '#/components/schemas/Pedido' } } } }
-        '409': { description: Estoque insuficiente, content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } } }
+        '201': { description: Order placed, content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '409': { description: Not enough stock, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
 
-  /api/pedidos/{id}:
+  /api/orders/{id}:
     parameters:
       - { in: path, name: id, required: true, schema: { type: integer } }
     get:
-      tags: [Pedidos]
-      summary: Detalhe do pedido
+      tags: [Orders]
+      summary: Order details
       responses:
-        '200': { description: Pedido }
-        '404': { description: Não encontrado ou de outro usuário }
+        '200': { description: Order }
+        '404': { description: Not found or owned by another user }
     delete:
-      tags: [Pedidos]
-      summary: Cancelar pedido (devolve o estoque)
+      tags: [Orders]
+      summary: Cancel an order (releases the stock)
       responses:
-        '200': { description: Cancelado }
-        '409': { description: Pedido já enviado ou entregue }
+        '200': { description: Cancelled }
+        '409': { description: Order already shipped or delivered }
 
-  /api/pedidos/{id}/status:
+  /api/orders/{id}/status:
     parameters:
       - { in: path, name: id, required: true, schema: { type: integer } }
     patch:
-      tags: [Pedidos]
-      summary: Mudar status (admin)
+      tags: [Orders]
+      summary: Change the status (admin)
       requestBody:
         content:
           application/json:
-            example: { status: enviado }
+            example: { status: shipped }
       responses:
-        '200': { description: Status atualizado }
-        '403': { description: Não é admin }
+        '200': { description: Status updated }
+        '403': { description: Not an admin }
