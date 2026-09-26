@@ -62,13 +62,7 @@ def log_request():
     print(f"IP: {client_ip} | {method} {path}{query_str}")
     print(f"User-Agent: {user_agent}")
     
-    # Se tiver corpo na requisição (POST, PUT), mostrar também
-    if method in ['POST', 'PUT', 'PATCH'] and request.is_json:
-        try:
-            body = request.json
-            print(f"Corpo: {body}")
-        except:
-            print("Corpo: [Não foi possível decodificar JSON]")
+    # O corpo não é registrado: pode conter senhas e tokens
     print("="*100)
 
 # Middleware para registrar todas as respostas enviadas
