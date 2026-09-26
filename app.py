@@ -1,226 +1,163 @@
-from flask import Flask, jsonify, request, Response
-from flask_cors import CORS
-import requests
+"""API Gateway do e-commerce.
+
+Único serviço exposto para fora da rede Docker. Ele:
+1. recebe as chamadas do front em /api/<serviço>/...;
+2. valida o token Bearer no serviço de usuários;
+3. repassa a chamada ao microserviço com o usuário autenticado nos headers internos
+   X-Usuario-Id e X-Usuario-Admin (headers com esse nome vindos do cliente são descartados);
+4. devolve a resposta ao front.
+"""
+import logging
 import os
-import datetime
+import time
 
-app = Flask(__name__)
-CORS(app)
+import requests
+from flask import Flask, Response, g, jsonify, request, send_from_directory
+from flask_cors import CORS
 
-# URLs dos serviços - obtém do ambiente ou usa valores padrão para desenvolvimento
 ITENS_SERVICE_URL = os.environ.get('ITENS_SERVICE_URL', 'http://service-itens:5001')
 PEDIDOS_SERVICE_URL = os.environ.get('PEDIDOS_SERVICE_URL', 'http://service-pedidos:5002')
 USUARIOS_SERVICE_URL = os.environ.get('USUARIOS_SERVICE_URL', 'http://service-usuarios:5003')
+FRONTEND_ORIGIN = os.environ.get('FRONTEND_ORIGIN', 'http://localhost:3000')
 
-# Mapeamento de rotas para direcionar requisições para cada microserviço
 SERVICE_ROUTES = {
     'itens': ITENS_SERVICE_URL,
     'pedidos': PEDIDOS_SERVICE_URL,
     'usuarios': USUARIOS_SERVICE_URL,
-    'auth': USUARIOS_SERVICE_URL  # Auth usa o mesmo serviço dos usuários
+    'auth': USUARIOS_SERVICE_URL,
 }
 
-"""
-FLUXO DE COMUNICAÇÃO DA ARQUITETURA:
+# Rotas liberadas sem login: (método, serviço, caminho completo ou None para qualquer subcaminho)
+PUBLICAS = {
+    ('GET', 'itens', None),
+    ('POST', 'usuarios', '/usuarios'),
+    ('POST', 'auth', '/auth/login'),
+    ('POST', 'auth', '/auth/logout'),
+}
 
-1. Cliente (Frontend/Browser) -> Envia requisições apenas para o API Gateway (porta 5000)
-   Exemplo: http://localhost:5000/api/itens
+HEADERS_INTERNOS = {'x-usuario-id', 'x-usuario-admin'}
+HOP_BY_HOP = {'host', 'content-length', 'connection', 'transfer-encoding', 'content-encoding'}
 
-2. API Gateway -> Analisa a URL e encaminha para o microserviço apropriado:
-   - /api/itens -> service-itens:5001/itens (microserviço de itens)
-   - /api/pedidos -> service-pedidos:5002/pedidos (microserviço de pedidos)
-   - /api/usuarios ou /api/auth -> service-usuarios:5003/usuarios ou /auth (microserviço de usuários)
+logging.basicConfig(level=logging.INFO, format='[api-gateway] %(message)s')
+log = logging.getLogger('api-gateway')
 
-3. Microserviços -> Processam a requisição e retornam a resposta para o API Gateway
+app = Flask(__name__)
+app.json.ensure_ascii = False
+CORS(app, resources={r'/api/*': {'origins': [FRONTEND_ORIGIN]}})
 
-4. API Gateway -> Repassa a resposta de volta para o cliente
 
-5. Comunicação entre microserviços (quando necessário):
-   - Um microserviço pode chamar outro através da rede Docker interna
-   - Exemplo: service-pedidos pode chamar service-itens para verificar estoque
-   
-Esta arquitetura implementa o padrão API Gateway para microserviços, onde:
-- Apenas o API Gateway é acessível externamente (segurança)
-- Clientes não conhecem a arquitetura interna (abstração)
-- Centraliza lógicas de roteamento, autorização e transformação (separação de responsabilidades)
-"""
-
-# Middleware para registrar todas as requisições recebidas
 @app.before_request
-def log_request():
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    client_ip = request.remote_addr
-    method = request.method
-    path = request.path
-    query = request.query_string.decode() if request.query_string else ""
-    query_str = f"?{query}" if query else ""
-    user_agent = request.headers.get('User-Agent', 'Unknown')
-    
-    # Formatar o log para ser bem visível
-    print("\n" + "="*100)
-    print(f"[API-GATEWAY] [{timestamp}] REQUISIÇÃO RECEBIDA")
-    print(f"IP: {client_ip} | {method} {path}{query_str}")
-    print(f"User-Agent: {user_agent}")
-    
-    # Se tiver corpo na requisição (POST, PUT), mostrar também
-    if method in ['POST', 'PUT', 'PATCH'] and request.is_json:
-        try:
-            body = request.json
-            print(f"Corpo: {body}")
-        except:
-            print("Corpo: [Não foi possível decodificar JSON]")
-    print("="*100)
+def iniciar_cronometro():
+    g.inicio = time.monotonic()
 
-# Middleware para registrar todas as respostas enviadas
+
 @app.after_request
-def log_response(response):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    status = response.status_code
-    status_text = "Sucesso" if 200 <= status < 400 else "Erro"
-    
-    print("\n" + "-"*100)
-    print(f"[API-GATEWAY] [{timestamp}] RESPOSTA ENVIADA")
-    print(f"Status: {status} ({status_text})")
-    print("-"*100 + "\n")
-    
-    # Adicionar headers para prevenir cache
-    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
+def registrar(response):
+    # Sem corpo e sem Authorization no log: só método, caminho, status e tempo
+    ms = (time.monotonic() - g.get('inicio', time.monotonic())) * 1000
+    log.info('%s %s -> %s (%.0f ms)', request.method, request.path, response.status_code, ms)
+    response.headers['Cache-Control'] = 'no-store'
     return response
 
-def proxy_request(service_url, path, method):
-    """
-    Encaminha requisições para o serviço apropriado e retorna a resposta
-    """
-    # Construir URL de destino - removendo o prefixo /api para mapear para as rotas internas
-    target_path = path.replace('/api', '')
-    target_url = f"{service_url}{target_path}"
-    
-    # Registrar a requisição sendo encaminhada
-    print(f"[API-GATEWAY] Encaminhando: {method} {path} → {target_url}")
-    
-    # Headers da requisição original (exceto host)
-    headers = {key: value for key, value in request.headers 
-              if key.lower() != 'host' and key.lower() != 'content-length'}
-    
-    # Adicionar headers anti-cache
-    headers['Cache-Control'] = 'no-cache, no-store'
-    headers['Pragma'] = 'no-cache'
-    
-    # Dados do corpo da requisição
-    data = request.get_data()
-    
-    # Parâmetros de consulta
-    params = request.args
-    
-    # Reenviar a requisição para o serviço de destino
+
+def eh_publica(metodo, servico, caminho):
+    return (metodo, servico, None) in PUBLICAS or (metodo, servico, caminho) in PUBLICAS
+
+
+def autenticar():
+    """Valida o token no serviço de usuários. Retorna (usuario, erro)."""
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return None, None
     try:
-        response = requests.request(
-            method=method,
-            url=target_url,
+        resp = requests.post(f'{USUARIOS_SERVICE_URL}/auth/verificar', json={'token': auth[7:]}, timeout=5)
+    except requests.exceptions.RequestException:
+        return None, (jsonify({"erro": "Serviço de usuários indisponível"}), 503)
+    if resp.status_code != 200:
+        return None, (jsonify({"erro": "Sessão inválida ou expirada"}), 401)
+    return resp.json()['usuario'], None
+
+
+def proxy(servico, caminho):
+    if servico not in SERVICE_ROUTES:
+        return jsonify({"erro": "Serviço não encontrado"}), 404
+    if request.method == 'OPTIONS':
+        return Response(status=204)
+
+    usuario, erro = autenticar()
+    if erro:
+        return erro
+    if usuario is None and not eh_publica(request.method, servico, caminho):
+        return jsonify({"erro": "Faça login para continuar"}), 401
+
+    headers = {k: v for k, v in request.headers if k.lower() not in HOP_BY_HOP | HEADERS_INTERNOS}
+    if usuario:
+        headers['X-Usuario-Id'] = str(usuario['id'])
+        headers['X-Usuario-Admin'] = '1' if usuario.get('is_admin') else '0'
+
+    try:
+        resp = requests.request(
+            request.method,
+            f'{SERVICE_ROUTES[servico]}{caminho}',
             headers=headers,
-            params=params,
-            data=data,
-            cookies=request.cookies,
+            params=request.args,
+            data=request.get_data(),
             allow_redirects=False,
-            timeout=10
+            timeout=10,
         )
-        
-        print(f"[API-GATEWAY] Resposta de {target_url}: {response.status_code}")
-        
-        # Preparar resposta
-        resp = Response(
-            response.content,
-            status=response.status_code
-        )
-        
-        # Copiar cabeçalhos relevantes
-        for header, value in response.headers.items():
-            if header.lower() not in ('transfer-encoding', 'content-encoding', 'content-length'):
-                resp.headers[header] = value
-                
-        # Garantir que headers anti-cache estão presentes
-        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
-        resp.headers['Pragma'] = 'no-cache'
-        resp.headers['Expires'] = '0'
-        
-        return resp
-    except requests.exceptions.RequestException as e:
-        print(f"[API-GATEWAY] ERRO ao encaminhar para {target_url}: {str(e)}")
-        return jsonify({
-            "erro": "Serviço indisponível",
-            "detalhes": str(e)
-        }), 503
+    except requests.exceptions.RequestException:
+        log.warning('serviço %s indisponível', servico)
+        return jsonify({"erro": "Serviço indisponível"}), 503
 
-@app.route('/api/<service>/<path:subpath>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-def route_request(service, subpath):
-    """
-    Roteia requisições para o serviço apropriado com base no prefixo da URL
-    """
-    if service not in SERVICE_ROUTES:
-        print(f"[API-GATEWAY] ERRO: Serviço '{service}' não encontrado")
-        return jsonify({"erro": "Serviço não encontrado"}), 404
-    
-    service_url = SERVICE_ROUTES[service]
-    path = f"/{service}/{subpath}"
-    
-    return proxy_request(service_url, path, request.method)
+    resposta = Response(resp.content, status=resp.status_code)
+    for header, valor in resp.headers.items():
+        if header.lower() not in HOP_BY_HOP:
+            resposta.headers[header] = valor
+    return resposta
 
-@app.route('/api/<service>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH'])
-def route_service_root(service):
-    """
-    Roteia requisições para a raiz de um serviço
-    """
-    if service not in SERVICE_ROUTES:
-        print(f"[API-GATEWAY] ERRO: Serviço '{service}' não encontrado")
-        return jsonify({"erro": "Serviço não encontrado"}), 404
-    
-    service_url = SERVICE_ROUTES[service]
-    path = f"/{service}"
-    
-    return proxy_request(service_url, path, request.method)
+
+@app.route('/api/<servico>', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+def rota_servico(servico):
+    return proxy(servico, f'/{servico}')
+
+
+@app.route('/api/<servico>/<path:subcaminho>', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+def rota_subcaminho(servico, subcaminho):
+    return proxy(servico, f'/{servico}/{subcaminho}')
+
 
 @app.route('/health', methods=['GET'])
 def health():
-    """
-    Verifica o status de saúde de todos os serviços
-    """
-    results = {}
-    
-    for service_name, service_url in SERVICE_ROUTES.items():
-        if service_name == 'auth':  # Pular 'auth' pois é o mesmo serviço que 'usuarios'
-            continue
-            
+    servicos = {}
+    for nome, url in (('itens', ITENS_SERVICE_URL), ('pedidos', PEDIDOS_SERVICE_URL), ('usuarios', USUARIOS_SERVICE_URL)):
         try:
-            response = requests.get(f"{service_url}/health", timeout=5)
-            results[service_name] = {
-                "status": "online" if response.status_code == 200 else "erro",
-                "code": response.status_code
-            }
+            resp = requests.get(f'{url}/health', timeout=3)
+            servicos[nome] = 'online' if resp.status_code == 200 else 'erro'
         except requests.exceptions.RequestException:
-            results[service_name] = {
-                "status": "offline"
-            }
-    
-    # Gateway está online
-    gateway_status = "online"
-    
-    # Status geral
-    status = {
-        "api_gateway": gateway_status,
-        "services": results
-    }
-    
-    return jsonify(status)
+            servicos[nome] = 'offline'
+    ok = all(s == 'online' for s in servicos.values())
+    return jsonify({"api_gateway": "online", "services": servicos}), 200 if ok else 503
+
+
+DOCS_HTML = """<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>E-commerce · API</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"></head>
+<body><div id="swagger"></div>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>SwaggerUIBundle({url: "/openapi.yaml", dom_id: "#swagger", deepLinking: true, tryItOutEnabled: true, persistAuthorization: true});</script>
+</body></html>"""
+
+
+@app.route('/docs', methods=['GET'])
+def docs():
+    return Response(DOCS_HTML, mimetype='text/html')
+
+
+@app.route('/openapi.yaml', methods=['GET'])
+def openapi():
+    return send_from_directory(app.root_path, 'openapi.yaml', mimetype='application/yaml')
+
 
 @app.route('/', methods=['GET'])
-def welcome():
-    return jsonify({
-        "mensagem": "API Gateway do E-commerce",
-        "versao": "1.0.0",
-        "servicos": list(SERVICE_ROUTES.keys())
-    })
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+def info():
+    return jsonify({"mensagem": "API Gateway do E-commerce", "versao": "2.0.0", "docs": "/docs", "servicos": list(SERVICE_ROUTES)})
