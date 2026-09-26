@@ -1,11 +1,11 @@
-"""API Gateway da Lume Store.
+"""Lume Store API Gateway.
 
-Único serviço exposto para fora da rede Docker. Ele:
-1. recebe as chamadas do front em /api/<serviço>/...;
-2. valida o token Bearer no serviço de usuários;
-3. repassa a chamada ao microserviço com o usuário autenticado nos headers internos
-   X-Usuario-Id e X-Usuario-Admin (headers com esse nome vindos do cliente são descartados);
-4. devolve a resposta ao front.
+The only service exposed outside the Docker network. It:
+1. receives the front's calls at /api/<resource>/...;
+2. validates the Bearer token with the users service;
+3. forwards the call to the right microservice with the authenticated user in the internal
+   headers X-User-Id and X-User-Admin (client-sent headers with these names are dropped);
+4. returns the response to the front.
 """
 import logging
 import os
@@ -15,27 +15,28 @@ import requests
 from flask import Flask, Response, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-ITENS_SERVICE_URL = os.environ.get('ITENS_SERVICE_URL', 'http://service-itens:5001')
-PEDIDOS_SERVICE_URL = os.environ.get('PEDIDOS_SERVICE_URL', 'http://service-pedidos:5002')
-USUARIOS_SERVICE_URL = os.environ.get('USUARIOS_SERVICE_URL', 'http://service-usuarios:5003')
+CATALOG_SERVICE_URL = os.environ.get('CATALOG_SERVICE_URL', 'http://lume-catalog:5001')
+ORDERS_SERVICE_URL = os.environ.get('ORDERS_SERVICE_URL', 'http://lume-orders:5002')
+USERS_SERVICE_URL = os.environ.get('USERS_SERVICE_URL', 'http://lume-users:5003')
 FRONTEND_ORIGIN = os.environ.get('FRONTEND_ORIGIN', 'http://localhost:3000')
 
+# Resource prefix -> microservice
 SERVICE_ROUTES = {
-    'itens': ITENS_SERVICE_URL,
-    'pedidos': PEDIDOS_SERVICE_URL,
-    'usuarios': USUARIOS_SERVICE_URL,
-    'auth': USUARIOS_SERVICE_URL,
+    'products': CATALOG_SERVICE_URL,
+    'orders': ORDERS_SERVICE_URL,
+    'users': USERS_SERVICE_URL,
+    'auth': USERS_SERVICE_URL,
 }
 
-# Rotas liberadas sem login: (método, serviço, caminho completo ou None para qualquer subcaminho)
-PUBLICAS = {
-    ('GET', 'itens', None),
-    ('POST', 'usuarios', '/usuarios'),
+# Routes open without login: (method, resource, full path or None for any subpath)
+PUBLIC_ROUTES = {
+    ('GET', 'products', None),
+    ('POST', 'users', '/users'),
     ('POST', 'auth', '/auth/login'),
     ('POST', 'auth', '/auth/logout'),
 }
 
-HEADERS_INTERNOS = {'x-usuario-id', 'x-usuario-admin'}
+INTERNAL_HEADERS = {'x-user-id', 'x-user-admin'}
 HOP_BY_HOP = {'host', 'content-length', 'connection', 'transfer-encoding', 'content-encoding'}
 
 logging.basicConfig(level=logging.INFO, format='[api-gateway] %(message)s')
@@ -47,58 +48,58 @@ CORS(app, resources={r'/api/*': {'origins': [FRONTEND_ORIGIN]}})
 
 
 @app.before_request
-def iniciar_cronometro():
-    g.inicio = time.monotonic()
+def start_timer():
+    g.started = time.monotonic()
 
 
 @app.after_request
-def registrar(response):
-    # Sem corpo e sem Authorization no log: só método, caminho, status e tempo
-    ms = (time.monotonic() - g.get('inicio', time.monotonic())) * 1000
+def log_request(response):
+    # No body and no Authorization in the log: only method, path, status and time
+    ms = (time.monotonic() - g.get('started', time.monotonic())) * 1000
     log.info('%s %s -> %s (%.0f ms)', request.method, request.path, response.status_code, ms)
     response.headers['Cache-Control'] = 'no-store'
     return response
 
 
-def eh_publica(metodo, servico, caminho):
-    return (metodo, servico, None) in PUBLICAS or (metodo, servico, caminho) in PUBLICAS
+def is_public(method, resource, path):
+    return (method, resource, None) in PUBLIC_ROUTES or (method, resource, path) in PUBLIC_ROUTES
 
 
-def autenticar():
-    """Valida o token no serviço de usuários. Retorna (usuario, erro)."""
+def authenticate():
+    """Validates the token with the users service. Returns (user, error_response)."""
     auth = request.headers.get('Authorization', '')
     if not auth.startswith('Bearer '):
         return None, None
     try:
-        resp = requests.post(f'{USUARIOS_SERVICE_URL}/auth/verificar', json={'token': auth[7:]}, timeout=5)
+        resp = requests.post(f'{USERS_SERVICE_URL}/auth/verify', json={'token': auth[7:]}, timeout=5)
     except requests.exceptions.RequestException:
-        return None, (jsonify({"erro": "Serviço de usuários indisponível"}), 503)
+        return None, (jsonify({'error': 'Serviço de usuários indisponível'}), 503)
     if resp.status_code != 200:
-        return None, (jsonify({"erro": "Sessão inválida ou expirada"}), 401)
-    return resp.json()['usuario'], None
+        return None, (jsonify({'error': 'Sessão inválida ou expirada'}), 401)
+    return resp.json()['user'], None
 
 
-def proxy(servico, caminho):
-    if servico not in SERVICE_ROUTES:
-        return jsonify({"erro": "Serviço não encontrado"}), 404
+def proxy(resource, path):
+    if resource not in SERVICE_ROUTES:
+        return jsonify({'error': 'Recurso não encontrado'}), 404
     if request.method == 'OPTIONS':
         return Response(status=204)
 
-    usuario, erro = autenticar()
-    if erro:
-        return erro
-    if usuario is None and not eh_publica(request.method, servico, caminho):
-        return jsonify({"erro": "Faça login para continuar"}), 401
+    user, error = authenticate()
+    if error:
+        return error
+    if user is None and not is_public(request.method, resource, path):
+        return jsonify({'error': 'Faça login para continuar'}), 401
 
-    headers = {k: v for k, v in request.headers if k.lower() not in HOP_BY_HOP | HEADERS_INTERNOS}
-    if usuario:
-        headers['X-Usuario-Id'] = str(usuario['id'])
-        headers['X-Usuario-Admin'] = '1' if usuario.get('is_admin') else '0'
+    headers = {k: v for k, v in request.headers if k.lower() not in HOP_BY_HOP | INTERNAL_HEADERS}
+    if user:
+        headers['X-User-Id'] = str(user['id'])
+        headers['X-User-Admin'] = '1' if user.get('is_admin') else '0'
 
     try:
         resp = requests.request(
             request.method,
-            f'{SERVICE_ROUTES[servico]}{caminho}',
+            f'{SERVICE_ROUTES[resource]}{path}',
             headers=headers,
             params=request.args,
             data=request.get_data(),
@@ -106,37 +107,37 @@ def proxy(servico, caminho):
             timeout=10,
         )
     except requests.exceptions.RequestException:
-        log.warning('serviço %s indisponível', servico)
-        return jsonify({"erro": "Serviço indisponível"}), 503
+        log.warning('%s service unavailable', resource)
+        return jsonify({'error': 'Serviço indisponível'}), 503
 
-    resposta = Response(resp.content, status=resp.status_code)
-    for header, valor in resp.headers.items():
+    response = Response(resp.content, status=resp.status_code)
+    for header, value in resp.headers.items():
         if header.lower() not in HOP_BY_HOP:
-            resposta.headers[header] = valor
-    return resposta
+            response.headers[header] = value
+    return response
 
 
-@app.route('/api/<servico>', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
-def rota_servico(servico):
-    return proxy(servico, f'/{servico}')
+@app.route('/api/<resource>', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+def resource_root(resource):
+    return proxy(resource, f'/{resource}')
 
 
-@app.route('/api/<servico>/<path:subcaminho>', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
-def rota_subcaminho(servico, subcaminho):
-    return proxy(servico, f'/{servico}/{subcaminho}')
+@app.route('/api/<resource>/<path:subpath>', methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+def resource_subpath(resource, subpath):
+    return proxy(resource, f'/{resource}/{subpath}')
 
 
 @app.route('/health', methods=['GET'])
 def health():
-    servicos = {}
-    for nome, url in (('itens', ITENS_SERVICE_URL), ('pedidos', PEDIDOS_SERVICE_URL), ('usuarios', USUARIOS_SERVICE_URL)):
+    services = {}
+    for name, url in (('catalog', CATALOG_SERVICE_URL), ('orders', ORDERS_SERVICE_URL), ('users', USERS_SERVICE_URL)):
         try:
             resp = requests.get(f'{url}/health', timeout=3)
-            servicos[nome] = 'online' if resp.status_code == 200 else 'erro'
+            services[name] = 'online' if resp.status_code == 200 else 'error'
         except requests.exceptions.RequestException:
-            servicos[nome] = 'offline'
-    ok = all(s == 'online' for s in servicos.values())
-    return jsonify({"api_gateway": "online", "services": servicos}), 200 if ok else 503
+            services[name] = 'offline'
+    ok = all(s == 'online' for s in services.values())
+    return jsonify({'gateway': 'online', 'services': services}), 200 if ok else 503
 
 
 DOCS_HTML = """<!doctype html>
@@ -160,4 +161,4 @@ def openapi():
 
 @app.route('/', methods=['GET'])
 def info():
-    return jsonify({"mensagem": "API Gateway da Lume Store", "versao": "2.0.0", "docs": "/docs", "servicos": list(SERVICE_ROUTES)})
+    return jsonify({'name': 'Lume Store API Gateway', 'version': '2.0.0', 'docs': '/docs', 'resources': list(SERVICE_ROUTES)})
