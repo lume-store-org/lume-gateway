@@ -12,7 +12,7 @@ import os
 import time
 
 import requests
-from flask import Flask, Response, g, jsonify, request
+from flask import Flask, Response, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 ITENS_SERVICE_URL = os.environ.get('ITENS_SERVICE_URL', 'http://service-itens:5001')
@@ -137,6 +137,25 @@ def health():
             servicos[nome] = 'offline'
     ok = all(s == 'online' for s in servicos.values())
     return jsonify({"api_gateway": "online", "services": servicos}), 200 if ok else 503
+
+
+DOCS_HTML = """<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>E-commerce · API</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"></head>
+<body><div id="swagger"></div>
+<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+<script>SwaggerUIBundle({url: "/openapi.yaml", dom_id: "#swagger", deepLinking: true, tryItOutEnabled: true, persistAuthorization: true});</script>
+</body></html>"""
+
+
+@app.route('/docs', methods=['GET'])
+def docs():
+    return Response(DOCS_HTML, mimetype='text/html')
+
+
+@app.route('/openapi.yaml', methods=['GET'])
+def openapi():
+    return send_from_directory(app.root_path, 'openapi.yaml', mimetype='application/yaml')
 
 
 @app.route('/', methods=['GET'])
