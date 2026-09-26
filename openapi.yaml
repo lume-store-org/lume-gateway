@@ -1,12 +1,12 @@
 openapi: 3.0.3
 info:
-  title: E-commerce com microserviços · API Gateway
+  title: Lume Store · API Gateway
   version: 2.0.0
   description: |
     Todas as chamadas passam pelo **API Gateway**, que valida o token e repassa ao microserviço certo:
     `/api/itens` → serviço de itens, `/api/pedidos` → serviço de pedidos, `/api/usuarios` e `/api/auth` → serviço de usuários.
 
-    1. Faça login em **POST /api/auth/login** (`cliente@loja.dev` / `senha123` ou `admin@loja.dev` / `admin123`).
+    1. Faça login em **POST /api/auth/login** (`cliente@lumestore.dev` / `senha123` ou `admin@lumestore.dev` / `admin123`).
     2. Copie o `token`, clique em **Authorize** e cole.
     3. Crie um pedido e veja o estoque do item diminuir.
 servers:
@@ -187,7 +187,7 @@ paths:
               properties:
                 email: { type: string }
                 senha: { type: string }
-            example: { email: cliente@loja.dev, senha: senha123 }
+            example: { email: cliente@lumestore.dev, senha: senha123 }
       responses:
         '200':
           description: Token de sessão (válido por 24 h)
@@ -225,7 +225,7 @@ paths:
                 senha: { type: string, minLength: 6 }
                 endereco: { type: string }
                 telefone: { type: string }
-            example: { nome: Maria Exemplo, email: maria@loja.dev, senha: exemplo123, endereco: 'Rua Exemplo, 45 - Campinas/SP' }
+            example: { nome: Maria Exemplo, email: maria@lumestore.dev, senha: exemplo123, endereco: 'Rua Exemplo, 45 - Campinas/SP' }
       responses:
         '201': { description: Conta criada, content: { application/json: { schema: { $ref: '#/components/schemas/Usuario' } } } }
         '409': { description: E-mail já cadastrado }

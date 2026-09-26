@@ -1,4 +1,4 @@
-"""API Gateway do e-commerce.
+"""API Gateway da Lume Store.
 
 Único serviço exposto para fora da rede Docker. Ele:
 1. recebe as chamadas do front em /api/<serviço>/...;
@@ -140,7 +140,7 @@ def health():
 
 
 DOCS_HTML = """<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8"><title>E-commerce · API</title>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Lume Store · API</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css"></head>
 <body><div id="swagger"></div>
 <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
@@ -160,4 +160,4 @@ def openapi():
 
 @app.route('/', methods=['GET'])
 def info():
-    return jsonify({"mensagem": "API Gateway do E-commerce", "versao": "2.0.0", "docs": "/docs", "servicos": list(SERVICE_ROUTES)})
+    return jsonify({"mensagem": "API Gateway da Lume Store", "versao": "2.0.0", "docs": "/docs", "servicos": list(SERVICE_ROUTES)})
