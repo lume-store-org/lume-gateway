@@ -1,0 +1,334 @@
+openapi: 3.0.3
+info:
+  title: E-commerce com microserviços · API Gateway
+  version: 2.0.0
+  description: |
+    Todas as chamadas passam pelo **API Gateway**, que valida o token e repassa ao microserviço certo:
+    `/api/itens` → serviço de itens, `/api/pedidos` → serviço de pedidos, `/api/usuarios` e `/api/auth` → serviço de usuários.
+
+    1. Faça login em **POST /api/auth/login** (`cliente@loja.dev` / `senha123` ou `admin@loja.dev` / `admin123`).
+    2. Copie o `token`, clique em **Authorize** e cole.
+    3. Crie um pedido e veja o estoque do item diminuir.
+servers:
+  - url: /
+tags:
+  - name: Catálogo
+    description: Serviço de itens (público para leitura; escrita só para admin)
+  - name: Autenticação
+    description: Serviço de usuários
+  - name: Usuários
+    description: Serviço de usuários
+  - name: Pedidos
+    description: Serviço de pedidos (conversa com o serviço de itens para reservar estoque)
+  - name: Saúde
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Erro:
+      type: object
+      properties:
+        erro: { type: string }
+    Item:
+      type: object
+      properties:
+        id: { type: integer, example: 7 }
+        nome: { type: string, example: Fone over-ear Bluetooth }
+        descricao: { type: string }
+        preco: { type: number, example: 449.9 }
+        estoque: { type: integer, example: 40 }
+        categoria: { type: string, example: Áudio }
+        imagem: { type: string, example: /produtos/fone-over-ear.jpg }
+        destaque: { type: boolean }
+    ItemEntrada:
+      type: object
+      required: [nome, preco]
+      properties:
+        nome: { type: string }
+        descricao: { type: string }
+        preco: { type: number }
+        estoque: { type: integer }
+        categoria: { type: string }
+        imagem: { type: string }
+        destaque: { type: boolean }
+      example: { nome: Carregador USB-C 65 W, descricao: Carregamento rápido para notebook e celular., preco: 199.9, estoque: 30, categoria: Acessórios, imagem: /produtos/placeholder.jpg }
+    Usuario:
+      type: object
+      properties:
+        id: { type: integer }
+        nome: { type: string }
+        email: { type: string }
+        endereco: { type: string }
+        telefone: { type: string }
+        is_admin: { type: boolean }
+        data_cadastro: { type: string, format: date-time }
+    Pedido:
+      type: object
+      properties:
+        id: { type: integer }
+        usuario_id: { type: integer }
+        data: { type: string, format: date-time }
+        status: { type: string, enum: [pendente, pago, enviado, entregue, cancelado] }
+        endereco_entrega: { type: string }
+        valor_total: { type: number }
+        itens:
+          type: array
+          items:
+            type: object
+            properties:
+              item_id: { type: integer }
+              nome: { type: string }
+              imagem: { type: string }
+              quantidade: { type: integer }
+              preco_unitario: { type: number }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [Saúde]
+      summary: Status do gateway e dos três microserviços
+      security: []
+      responses:
+        '200':
+          description: Todos online
+          content:
+            application/json:
+              example: { api_gateway: online, services: { itens: online, pedidos: online, usuarios: online } }
+        '503': { description: Algum serviço fora do ar }
+
+  /api/itens:
+    get:
+      tags: [Catálogo]
+      summary: Listar produtos
+      security: []
+      parameters:
+        - { in: query, name: busca, schema: { type: string }, example: fone }
+        - { in: query, name: categoria, schema: { type: string }, example: Áudio }
+        - { in: query, name: destaque, schema: { type: boolean } }
+      responses:
+        '200':
+          description: Produtos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  itens: { type: array, items: { $ref: '#/components/schemas/Item' } }
+    post:
+      tags: [Catálogo]
+      summary: Cadastrar produto (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemEntrada' }
+      responses:
+        '201': { description: Criado, content: { application/json: { schema: { $ref: '#/components/schemas/Item' } } } }
+        '401': { description: Sem login }
+        '403': { description: Não é admin }
+
+  /api/itens/categorias:
+    get:
+      tags: [Catálogo]
+      summary: Categorias com a quantidade de produtos
+      security: []
+      responses:
+        '200':
+          description: Categorias
+          content:
+            application/json:
+              example: { categorias: [{ nome: Áudio, total: 4 }, { nome: Eletrônicos, total: 4 }] }
+
+  /api/itens/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer }, example: 7 }
+    get:
+      tags: [Catálogo]
+      summary: Detalhe do produto
+      security: []
+      responses:
+        '200': { description: Produto, content: { application/json: { schema: { $ref: '#/components/schemas/Item' } } } }
+        '404': { description: Não encontrado }
+    put:
+      tags: [Catálogo]
+      summary: Atualizar produto (admin)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemEntrada' }
+      responses:
+        '200': { description: Atualizado }
+        '403': { description: Não é admin }
+    delete:
+      tags: [Catálogo]
+      summary: Remover produto (admin)
+      responses:
+        '200': { description: Removido }
+        '403': { description: Não é admin }
+
+  /api/auth/login:
+    post:
+      tags: [Autenticação]
+      summary: Login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, senha]
+              properties:
+                email: { type: string }
+                senha: { type: string }
+            example: { email: cliente@loja.dev, senha: senha123 }
+      responses:
+        '200':
+          description: Token de sessão (válido por 24 h)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  usuario: { $ref: '#/components/schemas/Usuario' }
+        '401': { description: Credenciais inválidas, content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } } }
+
+  /api/auth/logout:
+    post:
+      tags: [Autenticação]
+      summary: Encerrar a sessão
+      responses:
+        '200': { description: Sessão encerrada }
+
+  /api/usuarios:
+    post:
+      tags: [Usuários]
+      summary: Criar conta
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nome, email, senha]
+              properties:
+                nome: { type: string }
+                email: { type: string }
+                senha: { type: string, minLength: 6 }
+                endereco: { type: string }
+                telefone: { type: string }
+            example: { nome: Maria Exemplo, email: maria@loja.dev, senha: exemplo123, endereco: 'Rua Exemplo, 45 - Campinas/SP' }
+      responses:
+        '201': { description: Conta criada, content: { application/json: { schema: { $ref: '#/components/schemas/Usuario' } } } }
+        '409': { description: E-mail já cadastrado }
+    get:
+      tags: [Usuários]
+      summary: Listar usuários (admin)
+      responses:
+        '200': { description: Usuários }
+        '403': { description: Não é admin }
+
+  /api/usuarios/me:
+    get:
+      tags: [Usuários]
+      summary: Meu perfil
+      responses:
+        '200': { description: Perfil, content: { application/json: { schema: { $ref: '#/components/schemas/Usuario' } } } }
+        '401': { description: Sem login }
+    put:
+      tags: [Usuários]
+      summary: Atualizar meu perfil
+      requestBody:
+        content:
+          application/json:
+            example: { nome: Cliente Demo, endereco: 'Rua Nova, 10 - São Paulo/SP', telefone: '(11) 92222-2222' }
+      responses:
+        '200': { description: Atualizado }
+
+  /api/usuarios/me/senha:
+    patch:
+      tags: [Usuários]
+      summary: Trocar minha senha
+      requestBody:
+        content:
+          application/json:
+            example: { senha_atual: senha123, nova_senha: novaSenha123 }
+      responses:
+        '200': { description: Senha trocada; as outras sessões são encerradas }
+        '401': { description: Senha atual incorreta }
+
+  /api/pedidos:
+    get:
+      tags: [Pedidos]
+      summary: Meus pedidos (admin vê todos)
+      responses:
+        '200':
+          description: Pedidos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pedidos: { type: array, items: { $ref: '#/components/schemas/Pedido' } }
+    post:
+      tags: [Pedidos]
+      summary: Criar pedido
+      description: O preço vem do catálogo, nunca do cliente. O estoque é reservado no serviço de itens numa única transação.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [itens]
+              properties:
+                itens:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      item_id: { type: integer }
+                      quantidade: { type: integer }
+                endereco_entrega: { type: string }
+            example: { itens: [{ item_id: 7, quantidade: 1 }, { item_id: 13, quantidade: 1 }], endereco_entrega: 'Rua de Teste, 123 - São Paulo/SP' }
+      responses:
+        '201': { description: Pedido criado, content: { application/json: { schema: { $ref: '#/components/schemas/Pedido' } } } }
+        '409': { description: Estoque insuficiente, content: { application/json: { schema: { $ref: '#/components/schemas/Erro' } } } }
+
+  /api/pedidos/{id}:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    get:
+      tags: [Pedidos]
+      summary: Detalhe do pedido
+      responses:
+        '200': { description: Pedido }
+        '404': { description: Não encontrado ou de outro usuário }
+    delete:
+      tags: [Pedidos]
+      summary: Cancelar pedido (devolve o estoque)
+      responses:
+        '200': { description: Cancelado }
+        '409': { description: Pedido já enviado ou entregue }
+
+  /api/pedidos/{id}/status:
+    parameters:
+      - { in: path, name: id, required: true, schema: { type: integer } }
+    patch:
+      tags: [Pedidos]
+      summary: Mudar status (admin)
+      requestBody:
+        content:
+          application/json:
+            example: { status: enviado }
+      responses:
+        '200': { description: Status atualizado }
+        '403': { description: Não é admin }
